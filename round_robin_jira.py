@@ -12,6 +12,7 @@ ENV:
   RATE_LIMIT_SLEEP, LOG_ERRORS(true/false)
   CIS_FIELD_NAME (اختیاری؛ پیش‌فرض: "NTA TPS CIs")
   LOG_JSON_PATH (اختیاری؛ پیش‌فرض: "assign_log.jsonl")
+  TEXT_LOG_PATH (اختیاری؛ پیش‌فرض: "assign_stdout.log")
 """
 
 import os
@@ -23,53 +24,39 @@ from collections import deque
 from requests.auth import HTTPBasicAuth
 import getpass
 from datetime import datetime
+
 # ===== Text log tee (write every print also to file) =====
 TEXT_LOG_PATH = os.getenv("TEXT_LOG_PATH", "./assign_stdout.log")
 
-import builtins, io
+import builtins
 
-# ensure directory exists + touch the file once
 def _ensure_text_log_ready():
     try:
         base_dir = os.path.dirname(TEXT_LOG_PATH) or "."
         os.makedirs(base_dir, exist_ok=True)
-        # touch
-        with open(TEXT_LOG_PATH, "a", encoding="utf-8") as f:
+        with open(TEXT_LOG_PATH, "a", encoding="utf-8"):
             pass
         return True
     except Exception as e:
-        # fallback: show a clear warning on stdout (and continue without tee)
         builtins.print(f"[WARN] Cannot prepare TEXT_LOG_PATH '{TEXT_LOG_PATH}': {e}")
         return False
 
 _textlog_ok = _ensure_text_log_ready()
-
 _orig_print = builtins.print
 
 def _tee_print(*args, **kwargs):
-    # print to console as-usual
-    _orig_print(*args, **kwargs)
-
-    # also append to text log if ready
+    _orig_print(*args, **kwargs)  # console
     if not _textlog_ok:
         return
-
     try:
-        # avoid 'file' duplication if caller provided file=...
         kwargs2 = dict(kwargs)
-        kwargs2.pop("file", None)
+        kwargs2.pop("file", None)  # avoid double 'file='
         with open(TEXT_LOG_PATH, "a", encoding="utf-8") as f:
             _orig_print(*args, file=f, **kwargs2)
     except Exception as e:
-        # show only once per run if file writing fails
-        # (don't swallow silently)
         _orig_print(f"[WARN] Failed to write TEXT_LOG_PATH '{TEXT_LOG_PATH}': {e}")
 
-# redirect all prints
 builtins.print = _tee_print
-
-
-
 
 # ====== CONFIG ======
 JIRA_BASE_URL = os.getenv("JIRA_BASE_URL", "https://your-domain.atlassian.net").rstrip("/")
@@ -78,8 +65,7 @@ JIRA_API_TOKEN = os.getenv("JIRA_API_TOKEN")   # Cloud
 JIRA_PASSWORD = os.getenv("JIRA_PASSWORD")     # Server/DC
 JIRA_API_VERSION = os.getenv("JIRA_API_VERSION", "3")
 
-JQL = os.getenv("JQL", 'project = "NTA TPS SM" AND issuetype = Incident AND status = "In Progress - 2" AND assignee IS EMPTY AND "NTA TPS CIs" in ("هوش تجاری (NTC-20200)","تحلیل ریسک و حسابرسی سیستمی (NTC-20199)","تبادل داده (NTC-20198)","مدیریت داده (NTC-18755)") ORDER BY created DESC'
-)
+JQL = os.getenv("JQL", 'project = "NTA TPS SM" AND issuetype = Incident AND status = "In Progress - 2" AND assignee IS EMPTY AND "NTA TPS CIs" in ("هوش تجاری (NTC-20200)","تحلیل ریسک و حسابرسی سیستمی (NTC-20199)","تبادل داده (NTC-20198)","مدیریت داده (NTC-18755)") ORDER BY created DESC')
 
 def _load_json_env(name, default_str):
     try:
@@ -302,6 +288,32 @@ def route_by_cis(fields, cis_field_id):
 
     return None
 
+# ====== Assignable resolution (preflight) ======
+def resolve_assignable_user_for_issue(issue_key, hint):
+    """
+    روی همان issue از /user/assignable/search می‌پرسیم چه کاربری assignable است.
+    hint می‌تواند username/email/displayname باشد.
+    خروجی: {"mode":"server","name":...} یا {"accountId":...} یا None
+    """
+    variants = [
+        {"issueKey": issue_key, "username": hint},  # DC قدیمی
+        {"issueKey": issue_key, "query": hint},     # DC جدید/Cloud
+    ]
+    for params in variants:
+        try:
+            arr = jira_get("user/assignable/search", params=params)
+            if not isinstance(arr, list) or not arr:
+                continue
+            u = arr[0]
+            if u.get("accountId"):
+                return {"accountId": u["accountId"]}
+            name = u.get("name") or u.get("key")
+            if name:
+                return {"mode": "server", "name": name}
+        except Exception:
+            continue
+    return None
+
 def _append_json_log(record: dict, path: str):
     """Append a single JSON object as one line into a .jsonl file (create if not exists)."""
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
@@ -355,22 +367,8 @@ def run_once():
 
     log_record["issues_total"] = len(issues)
 
-    # 2) resolve users we might assign to (TEAM and forced users), excluding SKIP
-    forced_users = set(CIS_EXACT_MAP.values()) | set(CIS_IN_SET_MAP.keys())
-    needed_users = set(TEAM) | (forced_users & set(TEAM))
-    user_map = {}
-    for u in needed_users:
-        if u in SKIP:
-            continue
-        try:
-            user_map[u] = get_user_identifier(u)
-        except Exception as e:
-            msg = f"Could not resolve user '{u}': {e}"
-            print(f"[WARN] {msg}")
-            log_record["error_messages"].append(msg)
-
-    # 3) split issues into forced vs rr-needed
-    forced_pairs = []   # list of (issue, who)
+    # 2) split issues into forced vs rr-needed (by CIS)
+    forced_pairs = []   # list of (issue, who_hint)
     rr_issues = []      # list of issue
     for issue in issues:
         fields = issue.get("fields", {})
@@ -387,7 +385,20 @@ def run_once():
         else:
             rr_issues.append(issue)
 
-    # 4) prepare RR assignees only for rr_issues
+    # 3) preflight: any forced assignee not actually assignable? push to RR
+    still_forced = []
+    for issue, who in forced_pairs:
+        ident = resolve_assignable_user_for_issue(issue["key"], who)
+        if ident is None:
+            msg = f"User hint '{who}' not assignable for {issue['key']} — moving to RR."
+            print(f"[WARN] {msg}")
+            log_record["error_messages"].append(msg)
+            rr_issues.append(issue)
+        else:
+            still_forced.append((issue, who, ident))
+    forced_pairs = still_forced
+
+    # 4) compute RR assignees only for rr_issues
     effective_team = [m for m in TEAM if m not in SKIP]
     if rr_issues and not effective_team:
         msg = "RR is needed but effective TEAM is empty (all skipped?)."
@@ -403,7 +414,7 @@ def run_once():
 
     # 5) preview (fill log preview too)
     print("--- PREVIEW ---")
-    for issue, who in forced_pairs:
+    for issue, who, _ident in forced_pairs:
         f = issue.get("fields", {})
         pr = (f.get("priority") or {}).get("name")
         summ = f.get("summary")
@@ -439,15 +450,8 @@ def run_once():
     # 6) commit
     ok, err = 0, 0
 
-    # forced first
-    for issue, who in forced_pairs:
-        ident = user_map.get(who)
-        if not ident:
-            msg = f"No user identifier for {who}; skipping {issue.get('key')}"
-            print(f"[WARN] {msg}")
-            log_record["error_messages"].append(msg)
-            err += 1
-            continue
+    # forced first (ident already resolved as assignable)
+    for issue, who, ident in forced_pairs:
         try:
             payload = build_assign_payload(ident)
             jira_put_assign(issue["key"], payload)
@@ -460,11 +464,11 @@ def run_once():
             log_record["error_messages"].append(msg)
             err += 1
 
-    # then RR ones
+    # then RR ones (resolve per-issue assignable)
     for issue, who in zip(rr_issues, assignees_rr):
-        ident = user_map.get(who)
+        ident = resolve_assignable_user_for_issue(issue["key"], who)
         if not ident:
-            msg = f"No user identifier for {who}; skipping {issue.get('key')}"
+            msg = f"User hint '{who}' not assignable for {issue['key']} — skipping."
             print(f"[WARN] {msg}")
             log_record["error_messages"].append(msg)
             err += 1

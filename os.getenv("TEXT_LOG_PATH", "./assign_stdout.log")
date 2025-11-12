@@ -1,0 +1,45 @@
+[INFO] Using Basic Auth with username/password.
+
+[2025-11-12 13:10:40] ===== Round-Robin pass (single run) =====
+[INFO] JIRA_API_VERSION = 2
+[INFO] Current rotation index: 3
+--- PREVIEW ---
+NTATPSSM-12195 -> a.rajabian [FORCED] | Lowest | تناقض اطلاعات حساب بانکی سال 98
+NTATPSSM-11904 -> moha.mohammadi [FORCED] | Medium | متوقف شدن سناریو درپلاگین ترکیب جدول
+[INFO] Dry-run enabled. No changes applied.
+[INFO] Next rotation index would be: 3
+[INFO] Stats: {'assigned': 0, 'issues': 2, 'new_rotation': 3}
+[INFO] Using Basic Auth with username/password.
+
+[2025-11-12 13:15:48] ===== Round-Robin pass (single run) =====
+[INFO] JIRA_API_VERSION = 2
+[INFO] Current rotation index: 3
+--- PREVIEW ---
+NTATPSSM-11904 -> moha.mohammadi [FORCED] | Medium | متوقف شدن سناریو درپلاگین ترکیب جدول
+[INFO] Dry-run enabled. No changes applied.
+[INFO] Next rotation index would be: 3
+[INFO] Stats: {'assigned': 0, 'issues': 1, 'new_rotation': 3}
+[INFO] Using Basic Auth with username/password.
+
+[2025-11-12 13:17:04] ===== Round-Robin pass (single run) =====
+[INFO] JIRA_API_VERSION = 2
+[INFO] Current rotation index: 3
+--- PREVIEW ---
+NTATPSSM-11904 -> moha.mohammadi [FORCED] | Medium | متوقف شدن سناریو درپلاگین ترکیب جدول
+[ERR] NTATPSSM-11904 -> moha.mohammadi [FORCED] failed: Failed to assign NTATPSSM-11904: 400 {"errorMessages":[],"errors":{"assignee":"User 'a.mohammadizadeh' cannot be assigned issues."}}
+[INFO] Commit done. New rotation index: 3
+[INFO] Stats: {'assigned': 0, 'errors': 1, 'issues': 1, 'new_rotation': 3}
+[INFO] Using Basic Auth with username/password.
+
+[2025-11-12 13:40:17] ===== Round-Robin pass (single run) =====
+[INFO] JIRA_API_VERSION = 2
+[INFO] Current rotation index: 3
+--- PREVIEW ---
+NTATPSSM-12218 -> moha.mohammadi [FORCED] | High | دفتر علوم داده - باگ در تنظیمات خلاصه سازی ستون ها در گزارشات pa
+NTATPSSM-11904 -> moha.mohammadi [FORCED] | Medium | متوقف شدن سناریو درپلاگین ترکیب جدول
+NTATPSSM-11875 -> a.fazlollahi [FORCED] | Medium | عدم نمایش فیلد تاریخ قطعی‌سازی با وجود داشتن مقدار
+[OK] Assigned NTATPSSM-12218 to moha.mohammadi [FORCED]
+[OK] Assigned NTATPSSM-11904 to moha.mohammadi [FORCED]
+[OK] Assigned NTATPSSM-11875 to a.fazlollahi [FORCED]
+[INFO] Commit done. New rotation index: 3
+[INFO] Stats: {'assigned': 3, 'errors': 0, 'issues': 3, 'new_rotation': 3}
